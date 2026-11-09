@@ -16,7 +16,6 @@ An AI customer-operations system built with **n8n, Supabase, Stripe and LLMs**. 
 >
 > **Before any public exposure, remove or protect the three specialist test webhooks** (delete the `Webhook - Test ... Agent` node in `03`, `05` and `07` once testing is done, or enable authentication on it). Add authentication to the Supervisor webhook too. The specialists keep working without their test webhooks because the Supervisor calls them through *Execute Workflow*. Details: [docs/security-and-limitations.md](docs/security-and-limitations.md).
 
-📺 **Demo video:** (https://youtu.be/XajpSii3VII)
 
 ## The problem
 
