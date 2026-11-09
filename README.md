@@ -152,6 +152,12 @@ A few fallback messages inside the workflows are currently written in **Bengali*
 
 See [docs/setup.md](docs/setup.md). Short version: create the Supabase tables and functions, add credentials in n8n, import the workflows, set the three workflow IDs in the Supervisor, ingest products, activate, and call `POST /webhook/supervisor`.
 
+## Project Demo Video
+
+Watch the full demonstration of the Multi-Agent Business Operations Platform:
+
+[▶ Watch the Project Demo on YouTube](https://youtu.be/XajpSii3VII)
+
 ## Author
 
 Khalid Mostafiq Mahim, AI automation specialist.
