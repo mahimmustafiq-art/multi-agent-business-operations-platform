@@ -1,0 +1,865 @@
+{
+  "name": "07 - Billing Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "9a2e449d-fa49-44b8-ba5b-a87acc8fa338",
+      "name": "When Called by Supervisor",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "billing-agent-test",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "3bc85232-82a8-47c7-a3d0-32b5e3bed332",
+      "name": "Webhook - Test Billing Agent",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "supabase_url",
+              "value": "https://YOUR-PROJECT-REF.supabase.co",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "llm_model",
+              "value": "openai/gpt-oss-20b",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "7ddbf62b-32bf-426f-b5a6-027e49c5c0c5",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst src = (item.body && typeof item.body === 'object') ? item.body : item;\nconst message = String(src.message || '').trim();\nconst customerId = String(src.customer_id || '').trim();\nconst errors = [];\nif (!message) errors.push('message is required');\nif (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(customerId)) errors.push('customer_id must be the customer UUID from the customers table');\nconst toText = v => (v === undefined || v === null) ? '' : (typeof v === 'string' ? v : JSON.stringify(v));\nconst base = String(item.supabase_url || '').replace(/\\/+$/, '');\nreturn [{ json: {\n  valid: errors.length === 0, errors,\n  customer_id: customerId, message,\n  intent: toText(src.intent), memory: toText(src.memory), context: toText(src.context),\n  customer_url: base + '/rest/v1/customers?id=eq.' + customerId + '&select=id,external_id,name,stripe_customer_id,stripe_subscription_id&limit=1',\n  supabase_url: base, llm_model: item.llm_model\n} }];"
+      },
+      "id": "d195dca4-6f31-4699-a39e-59d819fb73c3",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "fb362698-6b9f-4697-b4d5-21f544ac49f1",
+      "name": "Input Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        688,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $input.first().json.errors || ['invalid input'];\nreturn [{ json: { success: false, response: null, confidence: 0, data: {}, needs_human: false, error: 'invalid_input: ' + e.join('; '), agent: 'billing' } }];"
+      },
+      "id": "3cc09cc5-6ab9-4943-812d-7e03ee7d1ddb",
+      "name": "Output - Invalid Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        912,
+        656
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.customer_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {}
+      },
+      "id": "62761b55-a94e-4017-be62-44aec78ffb31",
+      "name": "Fetch Customer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        912,
+        304
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $input.first().json;\nconst ok = !!(c && c.id);\nreturn [{ json: { found: ok, has_stripe: !!(ok && c.stripe_customer_id), customer: ok ? c : null } }];"
+      },
+      "id": "c9f8d622-2f35-4268-a949-ae87a61afe8b",
+      "name": "Check Billing Account",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1136,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.has_stripe }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "452ae602-3db0-4578-9c6c-2e3b112bd243",
+      "name": "Has Billing Account?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { success: true,\n  response: \"I'm sorry, I could not find a verified billing account for you, so I cannot share billing information right now. / দুঃখিত, আপনার জন্য যাচাইকৃত কোনো বিলিং অ্যাকাউন্ট খুঁজে পাইনি, তাই এখন বিলিং তথ্য দিতে পারছি না।\",\n  confidence: 0.3, data: { reason: 'no_stripe_account', evidence: [] }, needs_human: false, error: null, agent: 'billing' } }];"
+      },
+      "id": "9e4e39e1-1d91-40fb-8ca0-ea725e68b43a",
+      "name": "Output - No Billing Account",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1584,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.stripe.com/v1/subscriptions/' + $('Check Billing Account').first().json.customer.stripe_subscription_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "options": {}
+      },
+      "id": "b7e1355f-39d7-463a-80fa-17ca9e45337d",
+      "name": "Fetch Subscription",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1584,
+        192
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "stripeApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Stripe account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.stripe.com/v1/billing/meters?limit=100",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "options": {}
+      },
+      "id": "e9c06038-f278-4ed9-99b8-6b48ac3ef98f",
+      "name": "Fetch Meters",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1808,
+        192
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "stripeApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Stripe account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const chk = $('Check Billing Account').first().json;\nconst sub = $('Fetch Subscription').first().json || {};\nconst meters = $('Fetch Meters').first().json || {};\nconst list = Array.isArray(meters.data) ? meters.data : [];\nconst meter = list.find(m => m.event_name === 'ai_request');\nconst it = (sub.items && sub.items.data && sub.items.data[0]) || {};\nconst ps = it.current_period_start || sub.current_period_start || null;\nconst pe = it.current_period_end || sub.current_period_end || null;\nlet url = null, start = null, end = null;\nif (meter && ps && sub.customer === chk.customer.stripe_customer_id) {\n  start = Math.floor(ps / 60) * 60;\n  const now = Math.floor(Date.now() / 1000 / 60) * 60;\n  end = Math.min(now, pe || now);\n  if (end > start) url = 'https://api.stripe.com/v1/billing/meters/' + meter.id + '/event_summaries?customer=' + encodeURIComponent(chk.customer.stripe_customer_id) + '&start_time=' + start + '&end_time=' + end;\n}\nreturn [{ json: { usage_url: url, usage_start: start, usage_end: end, meter_id: meter ? meter.id : null } }];"
+      },
+      "id": "e65b1e12-6b8d-407a-819c-30798ebf1604",
+      "name": "Prepare Usage Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2032,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.usage_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "options": {}
+      },
+      "id": "a7581de3-89e7-4c9c-a986-f00588d1a097",
+      "name": "Fetch Usage Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2256,
+        192
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "stripeApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Stripe account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.stripe.com/v1/invoices?limit=5&customer=' + $('Check Billing Account').first().json.customer.stripe_customer_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "options": {}
+      },
+      "id": "5ffe30f2-1621-49ea-ac35-c9ebfd637274",
+      "name": "Fetch Invoices",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2480,
+        192
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "stripeApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Stripe account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.stripe.com/v1/invoices/create_preview",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "customer",
+              "value": "={{ $('Check Billing Account').first().json.customer.stripe_customer_id }}"
+            },
+            {
+              "name": "subscription",
+              "value": "={{ $('Check Billing Account').first().json.customer.stripe_subscription_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b326bdbb-81b9-415c-a3a2-938fcd8e4597",
+      "name": "Preview Upcoming Invoice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2704,
+        192
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "stripeApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Stripe account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Normalize Input').first().json;\nconst chk = $('Check Billing Account').first().json;\nconst cust = chk.customer;\nconst sid = cust.stripe_customer_id;\nconst NA = 'NOT AVAILABLE';\nconst good = o => !!(o && typeof o === 'object' && !o.error && o.object);\nconst money = (v, c) => (typeof v === 'number') ? (v / 100).toFixed(2) + ' ' + String(c || '').toUpperCase() : NA;\nconst ts = t => t ? new Date(t * 1000).toISOString() : NA;\nconst sub = $('Fetch Subscription').first().json;\nconst usage = $('Fetch Usage Summary').first().json;\nconst prep = $('Prepare Usage Request').first().json;\nconst inv = $('Fetch Invoices').first().json;\nconst prev = $('Preview Upcoming Invoice').first().json;\nconst ev = { customer: cust.external_id };\nif (good(sub) && sub.customer === sid) {\n  const it = (sub.items && sub.items.data && sub.items.data[0]) || {};\n  const price = it.price || {};\n  ev.subscription = { status: sub.status, collection_method: sub.collection_method, plan: price.nickname || NA, unit_price_per_request: money(price.unit_amount, price.currency), billing_interval: price.recurring ? price.recurring.interval : NA, current_period_start: ts(it.current_period_start || sub.current_period_start), current_period_end: ts(it.current_period_end || sub.current_period_end), cancel_at_period_end: sub.cancel_at_period_end };\n} else { ev.subscription = NA; }\nif (good(usage) && usage.object === 'list' && Array.isArray(usage.data)) {\n  const total = usage.data.reduce((s, r) => s + (Number(r.aggregated_value) || 0), 0);\n  ev.usage = { requests_this_period: total, counted_from: ts(prep.usage_start), counted_until: ts(prep.usage_end) };\n} else { ev.usage = NA; }\nif (good(prev) && prev.object === 'invoice' && prev.customer === sid) {\n  ev.upcoming_invoice_estimate = { total: money(prev.total, prev.currency), amount_due: money(prev.amount_due, prev.currency) };\n} else { ev.upcoming_invoice_estimate = NA; }\nif (good(inv) && inv.object === 'list' && Array.isArray(inv.data)) {\n  ev.recent_invoices = inv.data.filter(i => i.customer === sid).map(i => ({ invoice_number: i.number || NA, status: i.status, total: money(i.total, i.currency), amount_due: money(i.amount_due, i.currency), created: ts(i.created), link: i.hosted_invoice_url || NA }));\n} else { ev.recent_invoices = NA; }\nconst system = 'You are the Billing Agent of a small business. Use ONLY the BILLING DATA provided; it was read from Stripe for this customer only. Rules: (1) Never invent usage, amounts, invoice numbers, invoice status, subscription status, payment status or any billing fact. If a value is NOT AVAILABLE or missing, say you do not have that verified information. (2) Usage is counted in AI requests; unit price comes from the subscription data. Do not calculate anything other than what the data states; quote the numbers exactly as given. (3) You cannot change subscriptions, cancel plans, send or resend invoices, apply credits or refunds: no authorization rules are configured. For such a request say it will be recorded and passed to the team for review, and use request_type subscription_change or invoice_request. (4) If the customer asks for a human use request_type human_handoff. (5) CUSTOMER MEMORY is background only, never a source of billing facts. (6) Reply in the same language as the customer message. Return ONLY a JSON object: {\"response\": string, \"confidence\": number between 0 and 1, \"request_type\": one of usage_lookup, invoice_lookup, subscription_lookup, subscription_change, invoice_request, human_handoff, general, \"summary\": one short English sentence describing the customer issue, \"needs_human\": boolean (true for subscription_change, invoice_request and human_handoff), \"handoff_reason\": string or null}. confidence reflects how well BILLING DATA supports your answer.';\nconst user = 'BILLING DATA (this customer only):\\n' + JSON.stringify(ev, null, 1) + '\\n\\nCUSTOMER MEMORY (background only):\\n' + (ctx.memory || 'none') + '\\n\\nCUSTOMER MESSAGE:\\n' + ctx.message + (ctx.context ? '\\n\\nSUPERVISOR REVIEW NOTE (a previous answer was rejected; answer again using ONLY the billing data above and remove any unsupported claim):\\n' + ctx.context : '');\nreturn [{ json: { customer_id: ctx.customer_id, message: ctx.message, supabase_url: ctx.supabase_url, llm_model: ctx.llm_model, evidence: [ev], system_prompt: system, user_prompt: user } }];"
+      },
+      "id": "f0fa421e-96d1-4915-be3c-99c64ff09570",
+      "name": "Build Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2928,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.llm_model, temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: $json.system_prompt }, { role: 'user', content: $json.user_prompt } ] }) }}",
+        "options": {}
+      },
+      "id": "d0aa4d45-e7dc-460d-b2e4-bebf969f4d95",
+      "name": "Billing LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3152,
+        192
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "groqApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Groq account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $('Build Context').first().json;\nconst ai = $input.first().json;\nlet content = ai.choices[0].message.content;\ncontent = String(content).replace(/```json|```/g, '').trim();\nconst p = JSON.parse(content);\nconst allowed = ['usage_lookup', 'invoice_lookup', 'subscription_lookup', 'subscription_change', 'invoice_request', 'human_handoff', 'general'];\nconst type = allowed.includes(p.request_type) ? p.request_type : 'general';\nconst response = String(p.response || '').trim();\nif (!response) throw new Error('LLM returned an empty response');\nconst confidence = Math.max(0, Math.min(1, Number(p.confidence) || 0));\nconst needsHuman = ['subscription_change', 'invoice_request', 'human_handoff'].includes(type);\nconst ticket = needsHuman ? { customer_id: b.customer_id, order_id: null, type, summary: String(p.summary || '').slice(0, 500), message: String(b.message).slice(0, 2000), status: type === 'human_handoff' ? 'open' : 'pending_human_review' } : null;\nconst dupUrl = needsHuman ? (b.supabase_url + '/rest/v1/support_tickets?customer_id=eq.' + b.customer_id + '&type=eq.' + type + '&order_id=is.null&status=in.(open,pending_human_review)&order=created_at.desc&limit=1&select=id,status') : null;\nreturn [{ json: { dup_url: dupUrl, create_ticket: needsHuman, ticket_payload: ticket, response, confidence, request_type: type, needs_human: needsHuman, handoff_reason: needsHuman ? String(p.handoff_reason || type).slice(0, 300) : null, supabase_url: b.supabase_url } }];"
+      },
+      "id": "aca8b0b4-2ba3-448d-8834-eec3ea32a6e3",
+      "name": "Parse & Decide",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3376,
+        192
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.create_ticket }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3f668ed3-f6cf-49cb-88a2-ae3b6fa1b0de",
+      "name": "Ticket Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3600,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.dup_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {}
+      },
+      "id": "22fd779f-86d0-4803-8274-37684dce4a2d",
+      "name": "Check Duplicate Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3824,
+        0
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ !!$json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a5f37583-dc43-495b-8a5f-45d1ada194bc",
+      "name": "Duplicate Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4048,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Parse & Decide').first().json.supabase_url }}/rest/v1/support_tickets",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Parse & Decide').first().json.ticket_payload) }}",
+        "options": {}
+      },
+      "id": "8a5712f7-0bc7-40aa-a4c5-0548438691d8",
+      "name": "Insert Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3824,
+        288
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $('Parse & Decide').first().json;\nlet ticket = null, dup = false;\ntry { const t = $('Insert Ticket').first().json; if (t && t.id) ticket = t; } catch (e) {}\nif (!ticket) { try { const t = $('Check Duplicate Ticket').first().json; if (t && t.id) { ticket = t; dup = true; } } catch (e) {} }\nconst ref = ticket ? String(ticket.id).slice(0, 8).toUpperCase() : null;\nreturn [{ json: { success: true, response: p.response + (ref ? '\\n\\nReference: ' + ref + (dup ? ' (existing request, no new ticket was created)' : '') : ''), confidence: p.confidence,\n  data: { request_type: p.request_type, ticket_id: ticket ? ticket.id : null, ticket_reference: ref, ticket_status: ticket ? ticket.status : null, ticket_duplicate: dup, handoff_reason: p.handoff_reason, evidence: $('Build Context').first().json.evidence },\n  needs_human: p.needs_human, error: null, agent: 'billing' } }];"
+      },
+      "id": "76163eb2-a3d5-450f-af69-f4511329fa88",
+      "name": "Output - Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4272,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json || {};\nconst e = j.error || j;\nconst msg = String(e.message || e.description || (typeof e === 'string' ? e : JSON.stringify(e))).slice(0, 500);\nreturn [{ json: { success: false, response: null, confidence: 0, data: {}, needs_human: true, error: 'billing_agent_failed: ' + msg, agent: 'billing' } }];"
+      },
+      "id": "4125f5e2-a7f2-4ffa-ad5b-c1b947710621",
+      "name": "Output - Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3376,
+        512
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When Called by Supervisor": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Test Billing Agent": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Input Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Valid?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Customer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Invalid Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Customer": {
+      "main": [
+        [
+          {
+            "node": "Check Billing Account",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Billing Account": {
+      "main": [
+        [
+          {
+            "node": "Has Billing Account?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Billing Account?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Subscription",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - No Billing Account",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Subscription": {
+      "main": [
+        [
+          {
+            "node": "Fetch Meters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Meters": {
+      "main": [
+        [
+          {
+            "node": "Prepare Usage Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Usage Request": {
+      "main": [
+        [
+          {
+            "node": "Fetch Usage Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Usage Summary": {
+      "main": [
+        [
+          {
+            "node": "Fetch Invoices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Invoices": {
+      "main": [
+        [
+          {
+            "node": "Preview Upcoming Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preview Upcoming Invoice": {
+      "main": [
+        [
+          {
+            "node": "Build Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Context": {
+      "main": [
+        [
+          {
+            "node": "Billing LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Billing LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse & Decide",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Decide": {
+      "main": [
+        [
+          {
+            "node": "Ticket Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ticket Needed?": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate Ticket": {
+      "main": [
+        [
+          {
+            "node": "Duplicate Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate Found?": {
+      "main": [
+        [
+          {
+            "node": "Output - Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insert Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Ticket": {
+      "main": [
+        [
+          {
+            "node": "Output - Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {},
+  "nodeGroups": [],
+  "tags": []
+}

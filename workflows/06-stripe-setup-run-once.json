@@ -1,0 +1,546 @@
+{
+  "name": "06 - Stripe Setup (run once)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "85ba2375-9a3b-4e47-b5e8-c8d3a5d800b3",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        192,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "supabase_url",
+              "value": "https://YOUR-PROJECT-REF.supabase.co",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "1e35350c-9e20-4c4a-b240-3447c2b24d26",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        416,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.stripe.com/v1/billing/meters",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "setup-meter-ai-request-v1"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "display_name",
+              "value": "AI Requests"
+            },
+            {
+              "name": "event_name",
+              "value": "ai_request"
+            },
+            {
+              "name": "default_aggregation[formula]",
+              "value": "sum"
+            },
+            {
+              "name": "customer_mapping[event_payload_key]",
+              "value": "stripe_customer_id"
+            },
+            {
+              "name": "customer_mapping[type]",
+              "value": "by_id"
+            },
+            {
+              "name": "value_settings[event_payload_key]",
+              "value": "value"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "af0ad716-22cd-414f-b110-e4e0b746a537",
+      "name": "Create Meter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        272
+      ],
+      "credentials": {
+        "stripeApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Stripe account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.stripe.com/v1/products",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "setup-product-usage-v1"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "name",
+              "value": "AI Operations Platform - Usage"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f8ffad27-855d-42a9-a891-4dd9610a19e2",
+      "name": "Create Product",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        864,
+        272
+      ],
+      "credentials": {
+        "stripeApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Stripe account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.stripe.com/v1/prices",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "setup-price-usage-v1"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "currency",
+              "value": "usd"
+            },
+            {
+              "name": "unit_amount",
+              "value": "5"
+            },
+            {
+              "name": "recurring[interval]",
+              "value": "month"
+            },
+            {
+              "name": "recurring[usage_type]",
+              "value": "metered"
+            },
+            {
+              "name": "recurring[meter]",
+              "value": "={{ $('Create Meter').first().json.id }}"
+            },
+            {
+              "name": "product",
+              "value": "={{ $('Create Product').first().json.id }}"
+            },
+            {
+              "name": "lookup_key",
+              "value": "ai_request_usage_monthly"
+            },
+            {
+              "name": "nickname",
+              "value": "AI request - per request"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ba66b790-e08d-499a-8e72-ef60d62a9e51",
+      "name": "Create Price",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1088,
+        272
+      ],
+      "credentials": {
+        "stripeApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Stripe account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/customers?stripe_customer_id=is.null&select=id,external_id,name",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {}
+      },
+      "id": "86313887-bade-4bcc-8742-f2bce0f89fb7",
+      "name": "Get Customers Without Stripe ID",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1312,
+        272
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.stripe.com/v1/customers",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ 'setup-customer-' + $json.id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "name",
+              "value": "={{ $json.name || $json.external_id }}"
+            },
+            {
+              "name": "metadata[supabase_customer_id]",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "metadata[external_id]",
+              "value": "={{ $json.external_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "11de7210-13d0-43f6-9431-3b08b03bf997",
+      "name": "Create Stripe Customer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1536,
+        272
+      ],
+      "credentials": {
+        "stripeApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Stripe account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.stripe.com/v1/subscriptions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ 'setup-sub-v2-' + $json.id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "customer",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "items[0][price]",
+              "value": "={{ $('Create Price').first().json.id }}"
+            },
+            {
+              "name": "collection_method",
+              "value": "send_invoice"
+            },
+            {
+              "name": "days_until_due",
+              "value": "30"
+            },
+            {
+              "name": "metadata[supabase_customer_id]",
+              "value": "={{ $json.metadata.supabase_customer_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5f216805-4b38-4cdb-9269-efbf969bfe30",
+      "name": "Create Subscription",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1984,
+        272
+      ],
+      "credentials": {
+        "stripeApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Stripe account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Config').first().json.supabase_url }}/rest/v1/customers?id=eq.{{ $json.metadata.supabase_customer_id }}&select=id,external_id,stripe_customer_id,stripe_subscription_id",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ stripe_customer_id: $json.customer, stripe_subscription_id: $json.id }) }}",
+        "options": {}
+      },
+      "id": "afb8bca3-b417-41bb-b7e7-a2ffbaa9168d",
+      "name": "Save Stripe IDs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2208,
+        272
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nreturn [{ json: {\n  meter_id: $('Create Meter').first().json.id,\n  meter_event_name: $('Create Meter').first().json.event_name,\n  product_id: $('Create Product').first().json.id,\n  price_id: $('Create Price').first().json.id,\n  price_lookup_key: $('Create Price').first().json.lookup_key,\n  customers_linked: rows.length,\n  customers: rows.map(r => ({ external_id: r.external_id, stripe_customer_id: r.stripe_customer_id, stripe_subscription_id: r.stripe_subscription_id }))\n} }];"
+      },
+      "id": "2eff786a-4ab2-483f-bfb5-424cd7f5a6eb",
+      "name": "Summarize Setup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2432,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.stripe.com/v1/customers/{{ $json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "email",
+              "value": "={{ $json.metadata.external_id + '@example.com' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a58ccfa3-ae27-44fd-9962-a1d5d654327b",
+      "name": "Set Customer Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        272
+      ],
+      "credentials": {
+        "stripeApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Stripe account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Create Meter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Meter": {
+      "main": [
+        [
+          {
+            "node": "Create Product",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Product": {
+      "main": [
+        [
+          {
+            "node": "Create Price",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Price": {
+      "main": [
+        [
+          {
+            "node": "Get Customers Without Stripe ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Customers Without Stripe ID": {
+      "main": [
+        [
+          {
+            "node": "Create Stripe Customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Stripe Customer": {
+      "main": [
+        [
+          {
+            "node": "Set Customer Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Subscription": {
+      "main": [
+        [
+          {
+            "node": "Save Stripe IDs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Stripe IDs": {
+      "main": [
+        [
+          {
+            "node": "Summarize Setup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Customer Email": {
+      "main": [
+        [
+          {
+            "node": "Create Subscription",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {},
+  "nodeGroups": [],
+  "tags": []
+}

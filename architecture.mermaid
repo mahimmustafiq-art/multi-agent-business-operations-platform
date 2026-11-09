@@ -1,0 +1,23 @@
+flowchart TD
+  C[Customer message<br/>POST /supervisor] --> V[Validate and identify customer]
+  V --> I[Classify intent - Groq LLM]
+  I --> A[(supervisor_audit_log)]
+  I --> M[Retrieve top 5 customer memories<br/>Mistral embeddings + pgvector]
+  M --> R{Route}
+  R -- confidence under 0.6 / human / unknown --> E
+  R -- sales --> S[Sales agent<br/>RAG over products, draft quotes]
+  R -- support --> U[Support agent<br/>orders, tickets]
+  R -- billing --> B[Billing agent<br/>Stripe read-only]
+  S --> K
+  U --> K
+  B --> K
+  K[Self-critique - 2nd LLM call] --> D{Decision in code}
+  D -- approved, confidence 0.7+ --> OK[Reply to customer]
+  D -- not approved, attempt 1 --> R2[Retry once with reviewer feedback] --> K
+  D -- failed review / human needed --> E[(escalations: human queue)]
+  OK --> UE[(usage_events)] --> SM[Stripe meter event: ai_request]
+  OK --> MEM[(customer_memory)]
+  E --> MEM
+  S -.-> P[(products, quotes)]
+  U -.-> O[(orders, support_tickets)]
+  B -.-> ST[Stripe: subscription, usage, invoices]

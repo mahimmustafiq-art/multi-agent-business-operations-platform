@@ -1,0 +1,11 @@
+{
+  "products": [
+    {
+      "sku": "LM-MS-01",
+      "name": "Lumio Silent Wireless Mouse",
+      "price": 24.99,
+      "currency": "USD",
+      "in_stock": true
+    }
+  ]
+}

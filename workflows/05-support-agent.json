@@ -1,0 +1,562 @@
+{
+  "name": "05 - Support Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "ba7a9a5e-f71a-4656-8d83-11b66ca908c7",
+      "name": "When Called by Supervisor",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        688,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support-agent-test",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "624aef50-641c-422e-9f30-807c81c7ec92",
+      "name": "Webhook - Test Support Agent",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        688,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "supabase_url",
+              "value": "https://YOUR-PROJECT-REF.supabase.co",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "llm_model",
+              "value": "openai/gpt-oss-20b",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "c73d2c7e-c81e-4536-b843-ba8451010553",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        928,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst src = (item.body && typeof item.body === 'object') ? item.body : item;\nconst message = String(src.message || '').trim();\nconst customerId = String(src.customer_id || '').trim();\nconst errors = [];\nif (!message) errors.push('message is required');\nif (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(customerId)) errors.push('customer_id must be the customer UUID from the customers table');\nconst toText = v => (v === undefined || v === null) ? '' : (typeof v === 'string' ? v : JSON.stringify(v));\nconst base = String(item.supabase_url || '').replace(/\\/+$/, '');\nconst m = message.match(/\\bORD-\\d{3,}\\b/i);\nconst orderNumber = m ? m[0].toUpperCase() : null;\nconst select = 'id,order_number,status,total,currency,items,tracking_number,placed_at,shipped_at,delivered_at';\nconst ordersUrl = base + '/rest/v1/orders?customer_id=eq.' + customerId + (orderNumber ? '&order_number=eq.' + orderNumber : '&order=placed_at.desc&limit=5') + '&select=' + select;\nreturn [{ json: {\n  valid: errors.length === 0, errors,\n  customer_id: customerId, message,\n  intent: toText(src.intent), memory: toText(src.memory), context: toText(src.context),\n  order_number_mentioned: orderNumber, orders_url: ordersUrl,\n  supabase_url: base, llm_model: item.llm_model\n} }];"
+      },
+      "id": "34d85a70-1121-48f0-a8f5-2adeab2d9c01",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "5c3748a3-ee25-4a4d-9ff6-340adbcd144c",
+      "name": "Input Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1376,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $input.first().json.errors || ['invalid input'];\nreturn [{ json: { success: false, response: null, confidence: 0, data: {}, needs_human: false, error: 'invalid_input: ' + e.join('; '), agent: 'support' } }];"
+      },
+      "id": "e799b23b-0c37-422d-ab28-03ac8a11a691",
+      "name": "Output - Invalid Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.orders_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {}
+      },
+      "id": "ac999a70-f4bc-4b90-b3b9-f694fda32fe8",
+      "name": "Fetch Orders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1600,
+        -112
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Normalize Input').first().json;\nconst orders = $input.all().map(i => i.json).filter(o => o && o.order_number);\nconst orderText = orders.map(o => [\n  'Order: ' + o.order_number, 'Status: ' + o.status, 'Total: ' + o.total + ' ' + o.currency,\n  'Items: ' + JSON.stringify(o.items), 'Tracking number: ' + (o.tracking_number || 'NOT AVAILABLE'),\n  'Placed: ' + (o.placed_at || 'NOT AVAILABLE'), 'Shipped: ' + (o.shipped_at || 'NOT AVAILABLE'), 'Delivered: ' + (o.delivered_at || 'NOT AVAILABLE')\n].join('\\n')).join('\\n---\\n');\nconst evidence = orders.map(o => ({ order_number: o.order_number, status: o.status, total: o.total, currency: o.currency, items: o.items, tracking_number: o.tracking_number, placed_at: o.placed_at, shipped_at: o.shipped_at, delivered_at: o.delivered_at }));\nconst orderIds = {};\norders.forEach(o => { orderIds[o.order_number] = o.id; });\nconst user = 'ORDER DATA (this customer only):\\n' + (orderText || 'NONE (no matching order found on this account)') +\n  '\\n\\nCUSTOMER MEMORY (background only):\\n' + (ctx.memory || 'none') +\n  '\\n\\nCUSTOMER MESSAGE:\\n' + ctx.message +\n  (ctx.context ? '\\n\\nSUPERVISOR REVIEW NOTE (a previous answer was rejected; answer again using ONLY the order data above and remove any unsupported claim):\\n' + ctx.context : '');\nreturn [{ json: { customer_id: ctx.customer_id, message: ctx.message, supabase_url: ctx.supabase_url, llm_model: ctx.llm_model, evidence, order_ids: orderIds, system_prompt: \"You are the Support Agent of a small business. Use ONLY the ORDER DATA provided; it contains only this customer's own orders. Rules: (1) Never invent order status, tracking numbers, delivery dates, refund status or any other fact. If the data does not contain it, say you do not have that verified information. (2) If the customer asks about an order and no matching order is in the data, say you could not find that order on their account and ask them to check the order number. Do not guess. (3) Refunds: no refund policy is configured. Never approve, deny, promise, or estimate the time or amount of a refund, and never state eligibility. For a refund request you may only say the request will be recorded and passed to the team for review. Use request_type refund_request only when the customer names an order that is present in ORDER DATA; otherwise ask for the order number and use request_type general. (4) Complaints: respond with empathy, do not promise compensation, and say the complaint will be recorded and passed to the team; request_type complaint. (5) If the customer asks for a human, request_type human_handoff. (6) CUSTOMER MEMORY is background only, never a source of order facts. (7) If the customer only asks about or refers to an earlier request and does not ask for a new action, do NOT use refund_request or complaint; use general, and say what the earlier request was only if it appears in CUSTOMER MEMORY. (8) Reply in the same language as the customer message. Return ONLY a JSON object: {\\\"response\\\": string, \\\"confidence\\\": number between 0 and 1, \\\"request_type\\\": one of order_status, complaint, refund_request, human_handoff, general, \\\"order_number\\\": string or null (the order this request is about, only if it is present in ORDER DATA), \\\"summary\\\": one short English sentence describing the customer's issue, \\\"needs_human\\\": boolean (true for complaint, refund_request and human_handoff), \\\"handoff_reason\\\": string or null}. confidence reflects how well ORDER DATA supports your answer.\", user_prompt: user } }];"
+      },
+      "id": "31ad4989-2882-40c8-8d1e-21e4950dee0b",
+      "name": "Build Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1808,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.llm_model, temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: $json.system_prompt }, { role: 'user', content: $json.user_prompt } ] }) }}",
+        "options": {}
+      },
+      "id": "094d460b-f613-4dc6-8bcc-54b76d0c18e9",
+      "name": "Support LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2032,
+        -112
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "groqApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Groq account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $('Build Context').first().json;\nconst ai = $input.first().json;\nlet content = ai.choices[0].message.content;\ncontent = String(content).replace(/```json|```/g, '').trim();\nconst p = JSON.parse(content);\nconst allowed = ['order_status', 'complaint', 'refund_request', 'human_handoff', 'general'];\nlet type = allowed.includes(p.request_type) ? p.request_type : 'general';\nlet response = String(p.response || '').trim();\nif (!response) throw new Error('LLM returned an empty response');\nlet confidence = Math.max(0, Math.min(1, Number(p.confidence) || 0));\nlet orderNumber = p.order_number ? String(p.order_number).toUpperCase() : null;\nconst orderId = orderNumber && b.order_ids[orderNumber] ? b.order_ids[orderNumber] : null;\nif (!orderId) orderNumber = null;\nif (type === 'refund_request' && !orderId) {\n  type = 'general';\n  response = \"Please share your order number (for example ORD-1001) so we can record your request. / অনুগ্রহ করে আপনার অর্ডার নম্বর (যেমন ORD-1001) জানান, তাহলে আমরা আপনার অনুরোধ নথিভুক্ত করতে পারব।\";\n  confidence = Math.min(confidence, 0.6);\n}\nconst needsHuman = ['complaint', 'refund_request', 'human_handoff'].includes(type);\nconst createTicket = needsHuman;\nconst ticket = createTicket ? {\n  customer_id: b.customer_id, order_id: orderId, type,\n  summary: String(p.summary || '').slice(0, 500), message: String(b.message).slice(0, 2000),\n  status: type === 'refund_request' ? 'pending_human_review' : 'open'\n} : null;\nconst NONE = '00000000-0000-0000-0000-000000000000';\nconst dupUrl = createTicket ? (b.supabase_url + '/rest/v1/support_tickets?customer_id=eq.' + b.customer_id + '&type=eq.' + type + '&order_id=eq.' + (orderId || NONE) + '&status=in.(open,pending_human_review)&order=created_at.desc&limit=1&select=id,status') : null;\nreturn [{ json: { dup_url: dupUrl, create_ticket: createTicket, ticket_payload: ticket, response, confidence, request_type: type, order_number: orderNumber, needs_human: needsHuman, handoff_reason: needsHuman ? String(p.handoff_reason || type).slice(0, 300) : null, supabase_url: b.supabase_url } }];"
+      },
+      "id": "e8cf06a8-03d1-42b7-9271-8f8570c6a5ab",
+      "name": "Parse & Decide",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2256,
+        -112
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.create_ticket }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "359e127a-d54e-4b16-b1ea-dd05a424d88f",
+      "name": "Ticket Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Parse & Decide').first().json.supabase_url }}/rest/v1/support_tickets",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Parse & Decide').first().json.ticket_payload) }}",
+        "options": {}
+      },
+      "id": "b5927aa3-23e2-4d5d-b947-01b8c5c48d7d",
+      "name": "Insert Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2688,
+        -224
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $('Parse & Decide').first().json;\nlet ticket = null, dup = false;\ntry { const t = $('Insert Ticket').first().json; if (t && t.id) ticket = t; } catch (e) {}\nif (!ticket) { try { const t = $('Check Duplicate Ticket').first().json; if (t && t.id) { ticket = t; dup = true; } } catch (e) {} }\nconst ref = ticket ? String(ticket.id).slice(0, 8).toUpperCase() : null;\nreturn [{ json: { success: true, response: p.response + (ref ? '\\n\\nReference: ' + ref + (dup ? ' (existing request, no new ticket was created)' : '') : ''), confidence: p.confidence,\n  data: { request_type: p.request_type, order_number: p.order_number, ticket_id: ticket ? ticket.id : null, ticket_reference: ref, ticket_status: ticket ? ticket.status : null, ticket_duplicate: dup, handoff_reason: p.handoff_reason, evidence: $('Build Context').first().json.evidence },\n  needs_human: p.needs_human, error: null, agent: 'support' } }];"
+      },
+      "id": "9c93c3f8-e7ec-4d45-982f-24f46c95bea9",
+      "name": "Output - Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2912,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json || {};\nconst e = j.error || j;\nconst msg = String(e.message || e.description || (typeof e === 'string' ? e : JSON.stringify(e))).slice(0, 500);\nreturn [{ json: { success: false, response: null, confidence: 0, data: {}, needs_human: true, error: 'support_agent_failed: ' + msg, agent: 'support' } }];"
+      },
+      "id": "b1dd29d5-82cf-4291-879b-133aa0f407a9",
+      "name": "Output - Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2256,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.dup_url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {}
+      },
+      "id": "b4c309bb-51b6-4cb2-a2ca-05154b1209b5",
+      "name": "Check Duplicate Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2688,
+        -416
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ !!$json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "eb49c842-61c8-42d7-b51e-2a180675f65c",
+      "name": "Duplicate Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2896,
+        -416
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When Called by Supervisor": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Test Support Agent": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Input Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Valid?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Orders",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Invalid Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Orders": {
+      "main": [
+        [
+          {
+            "node": "Build Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Context": {
+      "main": [
+        [
+          {
+            "node": "Support LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Support LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse & Decide",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Decide": {
+      "main": [
+        [
+          {
+            "node": "Ticket Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ticket Needed?": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Ticket": {
+      "main": [
+        [
+          {
+            "node": "Output - Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate Ticket": {
+      "main": [
+        [
+          {
+            "node": "Duplicate Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate Found?": {
+      "main": [
+        [
+          {
+            "node": "Output - Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insert Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {},
+  "nodeGroups": [],
+  "tags": []
+}

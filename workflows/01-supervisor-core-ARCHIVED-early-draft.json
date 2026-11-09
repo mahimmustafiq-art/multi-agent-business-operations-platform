@@ -1,0 +1,384 @@
+{
+  "name": "01 - Supervisor Core",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "supervisor-core",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e6a97ea9-4ba3-4970-a5d0-e8d308a98b15",
+      "name": "Webhook - Customer Message",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1536,
+        832
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "supabase_url",
+              "value": "https://YOUR-PROJECT-REF.supabase.co",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "llm_model",
+              "value": "openai/gpt-oss-20b",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "51e2d2de-51d7-49b7-932f-9339905af2d5",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1312,
+        832
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst body = item.body || {};\nconst customerId = String(body.customer_id || '').trim();\nconst message = String(body.message || '').trim();\nconst errors = [];\nif (!customerId) errors.push('customer_id is required');\nif (!message) errors.push('message is required');\nif (message.length > 4000) errors.push('message too long (max 4000 characters)');\nreturn [{ json: {\n  valid: errors.length === 0,\n  errors,\n  customer_external_id: customerId,\n  customer_name: body.customer_name ? String(body.customer_name).trim() : null,\n  message,\n  message_id: String(body.message_id || $execution.id),\n  supabase_url: String(item.supabase_url || '').replace(/\\/+$/, ''),\n  llm_model: item.llm_model\n} }];"
+      },
+      "id": "101c70b2-789f-4c39-93a2-05d68312a903",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1104,
+        832
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "25a206f8-c9ed-4876-8545-7fb42cef1cd7",
+      "name": "Input Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -880,
+        832
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, error: 'invalid_input', details: $json.errors }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "34d851e7-086c-478a-9b5b-7779551fd075",
+      "name": "Respond 400 Invalid Input",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -656,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.supabase_url }}/rest/v1/customers?on_conflict=external_id",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify(Object.assign({ external_id: $json.customer_external_id }, $json.customer_name ? { name: $json.customer_name } : {})) }}",
+        "options": {}
+      },
+      "id": "d9b2c3da-4be7-4ef7-80cf-041ee0edc2c7",
+      "name": "Upsert Customer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -656,
+        736
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: $('Validate Input').first().json.llm_model,\n  temperature: 0,\n  max_tokens: 1500,\n  reasoning_effort: 'low',\n  response_format: { type: 'json_object' },\n  messages: [\n    {\n      role: 'system',\n      content: 'You are the intent classifier of a business operations platform. Classify the customer message into exactly one intent. sales = product information, recommendation, price, availability, quote. support = order status, complaint, refund, return, delivery problem. billing = invoice, usage, subscription, payment, plan change. human = customer explicitly asks for a human agent, or the message is legal, threatening or highly sensitive. unknown = cannot be classified. Respond ONLY with a JSON object with keys intent (one of sales, support, billing, human, unknown), confidence (number between 0 and 1) and reason (short sentence). Do not answer the customer.'\n    },\n    {\n      role: 'user',\n      content: $('Validate Input').first().json.message\n    }\n  ]\n}) }}",
+        "options": {}
+      },
+      "id": "5842806e-0e9c-46f4-bfa3-d2f20a8a5278",
+      "name": "Classify Intent (LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -432,
+        736
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "groqApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Groq account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Validate Input').first().json;\nconst cust = $('Upsert Customer').first().json;\nconst ai = $input.first().json;\nconst map = { sales: 'sales_agent', support: 'support_agent', billing: 'billing_agent', human: 'human_escalation', unknown: 'human_escalation' };\nconst LOW_CONFIDENCE = 0.6;\nlet intent = 'unknown';\nlet confidence = 0;\nlet reason = 'classification failed';\ntry {\n  let content = ai.choices[0].message.content;\n  content = content.replace(/```json|```/g, '').trim();\n  const p = JSON.parse(content);\n  if (map[p.intent]) intent = p.intent;\n  confidence = Math.max(0, Math.min(1, Number(p.confidence) || 0));\n  reason = String(p.reason || '').slice(0, 500);\n} catch (e) {\n  const apiErr = ai.error && ai.error.message ? ai.error.message : e.message;\n  reason = 'Classifier output invalid or LLM call failed: ' + apiErr;\n  intent = 'unknown';\n  confidence = 0;\n}\nlet specialist = map[intent];\nif (confidence < LOW_CONFIDENCE && specialist !== 'human_escalation') {\n  reason += ' | low confidence -> human_escalation';\n  specialist = 'human_escalation';\n}\nconst needs_human = specialist === 'human_escalation';\nreturn [{ json: {\n  customer_id: cust.id,\n  customer_external_id: ctx.customer_external_id,\n  message_id: ctx.message_id,\n  message: ctx.message,\n  supabase_url: ctx.supabase_url,\n  intent,\n  confidence,\n  routing_reason: reason,\n  selected_specialist: specialist,\n  needs_human\n} }];"
+      },
+      "id": "4b74c2ef-f8fd-4a9b-ab0e-6d102bca4494",
+      "name": "Parse Intent & Decide Route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        736
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.supabase_url }}/rest/v1/supervisor_audit_log",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ customer_id: $json.customer_id, message_id: $json.message_id, original_message: $json.message, intent: $json.intent, selected_specialist: $json.selected_specialist, routing_reason: $json.routing_reason, confidence: $json.confidence, needs_human: $json.needs_human, status: 'classified' }) }}",
+        "options": {}
+      },
+      "id": "a6aafb8b-7ca8-48e4-80b3-f3b7612193b6",
+      "name": "Insert Audit Log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        16,
+        736
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, audit_log_id: $json.id, customer_id: $json.customer_id, intent: $json.intent, confidence: $json.confidence, selected_specialist: $json.selected_specialist, routing_reason: $json.routing_reason, needs_human: $json.needs_human, note: 'Specialist agents are not connected yet. This response only shows classification and routing.' }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "e6eb4418-b321-4795-80e9-1b49ee0b151a",
+      "name": "Respond 200 Routed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        224,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, error: 'database_error', message: 'Supervisor could not save data. Please try again or contact support.' }) }}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "ce03408a-5099-43d5-b85d-ebf2aeb4a2a7",
+      "name": "Respond 500 Database Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        224,
+        928
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook - Customer Message": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Input Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Valid?": {
+      "main": [
+        [
+          {
+            "node": "Upsert Customer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400 Invalid Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Customer": {
+      "main": [
+        [
+          {
+            "node": "Classify Intent (LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 500 Database Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Intent (LLM)": {
+      "main": [
+        [
+          {
+            "node": "Parse Intent & Decide Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Intent & Decide Route": {
+      "main": [
+        [
+          {
+            "node": "Insert Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Audit Log": {
+      "main": [
+        [
+          {
+            "node": "Respond 200 Routed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 500 Database Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {},
+  "nodeGroups": [],
+  "tags": []
+}

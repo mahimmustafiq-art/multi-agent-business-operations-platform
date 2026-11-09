@@ -1,0 +1,598 @@
+{
+  "name": "03 - Sales Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "99a33620-baa8-41de-8c64-d02c513e744a",
+      "name": "When Called by Supervisor",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -1536,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sales-agent-test",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "1aa57868-93cd-4276-b4ef-020dd82d545a",
+      "name": "Webhook - Test Sales Agent",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1536,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "supabase_url",
+              "value": "https://YOUR-PROJECT-REF.supabase.co",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "embed_model",
+              "value": "mistral-embed",
+              "type": "string"
+            },
+            {
+              "id": "a3",
+              "name": "llm_model",
+              "value": "openai/gpt-oss-20b",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "b23db1d2-070d-4605-bce1-8faa14f91d5a",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1296,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst src = (item.body && typeof item.body === 'object') ? item.body : item;\nconst message = String(src.message || '').trim();\nconst customerId = String(src.customer_id || '').trim();\nconst errors = [];\nif (!message) errors.push('message is required');\nif (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(customerId)) errors.push('customer_id must be the customer UUID from the customers table');\nconst toText = v => (v === undefined || v === null) ? '' : (typeof v === 'string' ? v : JSON.stringify(v));\nreturn [{ json: {\n  valid: errors.length === 0, errors,\n  customer_id: customerId, message,\n  intent: toText(src.intent), memory: toText(src.memory), context: toText(src.context),\n  supabase_url: String(item.supabase_url || '').replace(/\\/+$/, ''),\n  embed_model: item.embed_model, llm_model: item.llm_model\n} }];"
+      },
+      "id": "b89604df-5a2e-400a-bf73-f90ae4e68a8a",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1072,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "376ee9b8-a389-4bed-befb-9a26fa35eeaf",
+      "name": "Input Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -864,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $input.first().json.errors || ['invalid input'];\nreturn [{ json: { success: false, response: null, confidence: 0, data: {}, needs_human: false, error: 'invalid_input: ' + e.join('; '), agent: 'sales' } }];"
+      },
+      "id": "82012938-dfcc-48b8-8a15-d52b044c2e79",
+      "name": "Output - Invalid Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -640,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.mistral.ai/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "mistralCloudApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.embed_model, input: [$json.message] }) }}",
+        "options": {}
+      },
+      "id": "2814f46a-a52b-47d1-884d-39af96db59f1",
+      "name": "Embed Query",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -640,
+        128
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Mistral Cloud account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Normalize Input').first().json.supabase_url }}/rest/v1/rpc/match_products",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query_embedding: $json.data[0].embedding, match_count: 5 }) }}",
+        "options": {}
+      },
+      "id": "0232303f-a8c9-457d-95a9-a73465d5ca3e",
+      "name": "Search Products",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -416,
+        128
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Normalize Input').first().json;\nconst items = $input.all().map(i => i.json).filter(p => p && p.sku);\nconst products = items.map(p => ({\n  sku: p.sku, name: p.name, description: p.description, category: p.category,\n  price: p.price, currency: p.currency, in_stock: p.in_stock, stock_quantity: p.stock_quantity,\n  specs: p.specs || {}, similarity: Number(p.similarity)\n}));\nconst na = v => (v === null || v === undefined || v === '') ? 'NOT AVAILABLE' : v;\nconst productContext = products.map(p => [\n  'SKU: ' + p.sku, 'Name: ' + p.name, 'Category: ' + na(p.category), 'Description: ' + na(p.description),\n  'Price: ' + (p.price === null ? 'NOT AVAILABLE' : p.price + ' ' + na(p.currency)),\n  'In stock: ' + (p.in_stock === null ? 'NOT AVAILABLE' : p.in_stock),\n  'Stock quantity: ' + na(p.stock_quantity),\n  'Specs: ' + (Object.keys(p.specs).length ? JSON.stringify(p.specs) : 'NOT AVAILABLE')\n].join('\\n')).join('\\n---\\n');\nconst system = 'You are the Sales Agent of a small business. Answer ONLY from the PRODUCT DATA provided. Rules: (1) Never invent products, prices, availability, discounts, specifications or quote values. (2) If the data does not contain what the customer asks, say clearly that you do not have enough verified information about it. (3) Never offer or mention discounts; there is no discount data. (4) You may recommend products and suggest an upsell only among the listed products, using only facts present in the data. (5) CUSTOMER MEMORY is background only, never a source of product facts. (6) Reply in the same language as the customer message. (7) If the customer asks for a quote, put the SKU and quantity in quote_request; do NOT calculate totals yourself, the system calculates them. If the quantity is not stated, ask the customer and set requested to false. Return ONLY a JSON object: {\"response\": string, \"confidence\": number between 0 and 1, \"used_skus\": [string], \"quote_request\": {\"requested\": boolean, \"items\": [{\"sku\": string, \"quantity\": integer}]}}. confidence reflects how well the product data supports your answer.';\nconst user = 'PRODUCT DATA:\\n' + (productContext || 'NONE') + '\\n\\nCUSTOMER MEMORY (background only):\\n' + (ctx.memory || 'none') + '\\n\\nCUSTOMER MESSAGE:\\n' + ctx.message + (ctx.context ? '\\n\\nSUPERVISOR REVIEW NOTE (a previous answer was rejected; answer again using ONLY the product data above and remove any claim not supported by it):\\n' + ctx.context : '');\nreturn [{ json: { customer_id: ctx.customer_id, message: ctx.message, supabase_url: ctx.supabase_url, llm_model: ctx.llm_model,\n  has_products: products.length > 0, products, evidence: products.map(p => ({ sku: p.sku, name: p.name, category: p.category, price: p.price, currency: p.currency, in_stock: p.in_stock, stock_quantity: p.stock_quantity, specs: p.specs })), system_prompt: system, user_prompt: user } }];"
+      },
+      "id": "05315b3e-ff01-4ec3-a987-f3b55d472ef4",
+      "name": "Build Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.has_products }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7d586a5e-16f5-4fa6-bc68-d211835fc780",
+      "name": "Has Products?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        32,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { success: true,\n  response: \"I'm sorry, I don't have enough verified product information to answer this right now. / দুঃখিত, এই বিষয়ে আমার কাছে যাচাইকৃত পর্যাপ্ত তথ্য নেই।\",\n  confidence: 0.2, data: { reason: 'no_products_found', evidence: [] }, needs_human: false, error: null, agent: 'sales' } }];"
+      },
+      "id": "a00e36a7-f6bb-4b5c-90b8-52fb5a57014e",
+      "name": "Output - No Product Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.llm_model, temperature: 0.2, max_tokens: 2000, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: $json.system_prompt }, { role: 'user', content: $json.user_prompt } ] }) }}",
+        "options": {}
+      },
+      "id": "0316c3d6-9f20-4266-931c-2f597851a813",
+      "name": "Sales LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        256,
+        32
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "groqApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Groq account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Build Context').first().json;\nconst ai = $input.first().json;\nlet content = ai.choices[0].message.content;\ncontent = String(content).replace(/```json|```/g, '').trim();\nconst p = JSON.parse(content);\nlet response = String(p.response || '').trim();\nif (!response) throw new Error('LLM returned an empty response');\nlet confidence = Math.max(0, Math.min(1, Number(p.confidence) || 0));\nconst bySku = {};\nctx.products.forEach(x => { bySku[x.sku] = x; });\nconst usedSkus = (Array.isArray(p.used_skus) ? p.used_skus : []).filter(s => bySku[s]);\nconst qr = p.quote_request || {};\nlet createQuote = false, quotePayload = null, issues = [];\nif (qr.requested === true && Array.isArray(qr.items) && qr.items.length) {\n  const lines = [];\n  let currency = null;\n  for (const it of qr.items) {\n    const prod = bySku[it.sku];\n    const qty = Number(it.quantity);\n    if (!prod) { issues.push('unknown SKU ' + it.sku); continue; }\n    if (!Number.isInteger(qty) || qty < 1 || qty > 1000) { issues.push('invalid quantity for ' + it.sku); continue; }\n    if (prod.price === null || prod.price === undefined || !prod.currency) { issues.push('price not available for ' + it.sku); continue; }\n    if (prod.in_stock !== true) { issues.push('availability not verified for ' + it.sku); continue; }\n    if (currency && currency !== prod.currency) { issues.push('mixed currencies'); continue; }\n    currency = prod.currency;\n    lines.push({ sku: prod.sku, name: prod.name, quantity: qty, unit_price: Number(prod.price), line_total: Math.round(Number(prod.price) * qty * 100) / 100, currency });\n  }\n  if (lines.length && issues.length === 0) {\n    const total = Math.round(lines.reduce((s, l) => s + l.line_total, 0) * 100) / 100;\n    createQuote = true;\n    quotePayload = { customer_id: ctx.customer_id, items: lines, total, currency, status: 'draft' };\n    response += '\\n\\nQuote (draft):\\n' + lines.map(l => l.sku + ' x ' + l.quantity + ' @ ' + l.unit_price + ' = ' + l.line_total + ' ' + l.currency).join('\\n') + '\\nTotal: ' + total + ' ' + currency;\n  } else if (issues.length) {\n    response += '\\n\\nNote: a quote could not be created because verified data was missing or invalid: ' + issues.join('; ') + '.';\n    confidence = Math.min(confidence, 0.5);\n  }\n}\nreturn [{ json: { create_quote: createQuote, quote_payload: quotePayload, response, confidence, used_skus: usedSkus, quote_issues: issues, supabase_url: ctx.supabase_url } }];"
+      },
+      "id": "97fd8971-06c0-45f7-84db-111438622e00",
+      "name": "Parse & Prepare Quote",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        32
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.create_quote }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3657d18e-e1b4-4549-8fa7-530a0ebbafff",
+      "name": "Quote Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        688,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.supabase_url }}/rest/v1/quotes",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.quote_payload) }}",
+        "options": {}
+      },
+      "id": "726a0f61-d0f8-4202-893a-1f54cf22db93",
+      "name": "Insert Quote",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        912,
+        -80
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $('Parse & Prepare Quote').first().json;\nlet quote = null;\ntry { const q = $('Insert Quote').first().json; if (q && q.id) quote = q; } catch (e) {}\nreturn [{ json: { success: true, response: p.response, confidence: p.confidence,\n  data: { used_skus: p.used_skus, quote_id: quote ? quote.id : null, quote_total: quote ? quote.total : null, quote_issues: p.quote_issues, evidence: $('Build Context').first().json.evidence },\n  needs_human: false, error: null, agent: 'sales' } }];"
+      },
+      "id": "0d4ad9f5-4cd8-4ad3-bf70-44648a0ee066",
+      "name": "Output - Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1136,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json || {};\nconst e = j.error || j;\nconst msg = String(e.message || e.description || (typeof e === 'string' ? e : JSON.stringify(e))).slice(0, 500);\nreturn [{ json: { success: false, response: null, confidence: 0, data: {}, needs_human: true, error: 'sales_agent_failed: ' + msg, agent: 'sales' } }];"
+      },
+      "id": "59ae8327-1cdd-48f5-9086-a6ce174b32c2",
+      "name": "Output - Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        352
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When Called by Supervisor": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Test Sales Agent": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Input Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Valid?": {
+      "main": [
+        [
+          {
+            "node": "Embed Query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Invalid Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Query": {
+      "main": [
+        [
+          {
+            "node": "Search Products",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Products": {
+      "main": [
+        [
+          {
+            "node": "Build Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Context": {
+      "main": [
+        [
+          {
+            "node": "Has Products?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Products?": {
+      "main": [
+        [
+          {
+            "node": "Sales LLM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - No Product Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse & Prepare Quote",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Prepare Quote": {
+      "main": [
+        [
+          {
+            "node": "Quote Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quote Needed?": {
+      "main": [
+        [
+          {
+            "node": "Insert Quote",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Quote": {
+      "main": [
+        [
+          {
+            "node": "Output - Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Output - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {},
+  "nodeGroups": [],
+  "tags": []
+}

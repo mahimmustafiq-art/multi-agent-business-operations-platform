@@ -1,0 +1,1808 @@
+{
+  "name": "04 - Supervisor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "supervisor",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "149829cc-fd1b-44af-aa54-5e6b1bb49009",
+      "name": "Webhook - Customer Message",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -432,
+        -1008
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "supabase_url",
+              "value": "https://YOUR-PROJECT-REF.supabase.co",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "llm_model",
+              "value": "openai/gpt-oss-20b",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "5bd74b2a-deae-4604-af2f-c34d383f6cdb",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -208,
+        -1008
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst body = item.body || {};\nconst customerId = String(body.customer_id || '').trim();\nconst message = String(body.message || '').trim();\nconst errors = [];\nif (!customerId) errors.push('customer_id is required');\nif (!message) errors.push('message is required');\nif (message.length > 4000) errors.push('message too long (max 4000 characters)');\nconst tm = String(body.test_mode || '');\nconst testMode = ['corrupt_first_attempt', 'corrupt_all'].includes(tm) ? tm : null;\nreturn [{ json: {\n  valid: errors.length === 0, errors,\n  customer_external_id: customerId,\n  customer_name: body.customer_name ? String(body.customer_name).trim() : null,\n  message,\n  message_id: String(body.message_id || $execution.id),\n  test_mode: testMode,\n  supabase_url: String(item.supabase_url || '').replace(/\\/+$/, ''),\n  llm_model: item.llm_model\n} }];"
+      },
+      "id": "f00366cd-cec9-4b40-bcde-6ade073a9175",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        16,
+        -1008
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "74828535-3d6c-4d13-b1a5-e416bda445ba",
+      "name": "Input Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        240,
+        -1008
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, error: 'invalid_input', details: $json.errors }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "b986f5ff-9b2a-462c-b2b5-546e1a75fba5",
+      "name": "Respond 400 Invalid Input",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        448,
+        -768
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.supabase_url }}/rest/v1/customers?on_conflict=external_id",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify(Object.assign({ external_id: $json.customer_external_id }, $json.customer_name ? { name: $json.customer_name } : {})) }}",
+        "options": {}
+      },
+      "id": "0893e3c6-93b0-4352-9cfd-426de2a80559",
+      "name": "Upsert Customer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        448,
+        -1104
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $('Validate Input').first().json.llm_model, temperature: 0, max_tokens: 1500, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: \"You are the intent classifier of a business operations platform. Classify the customer message into exactly one intent. sales = product information, recommendation, price, availability, quote. support = order status, complaint, refund, return, delivery problem. billing = invoice, usage, subscription, payment, plan change. human = customer explicitly asks for a human agent, or the message is legal, threatening or highly sensitive. unknown = cannot be classified. Respond ONLY with a JSON object with keys intent (one of sales, support, billing, human, unknown), confidence (number between 0 and 1) and reason (short sentence). Do not answer the customer.\" }, { role: 'user', content: $('Validate Input').first().json.message } ] }) }}",
+        "options": {}
+      },
+      "id": "e0f34830-5610-4ceb-95cc-5fc8931a6ae9",
+      "name": "Classify Intent (LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        -1104
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "groqApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Groq account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Validate Input').first().json;\nconst cust = $('Upsert Customer').first().json;\nconst ai = $input.first().json;\nconst map = { sales: 'sales_agent', support: 'support_agent', billing: 'billing_agent', human: 'human_escalation', unknown: 'human_escalation' };\nconst LOW_CONFIDENCE = 0.6;\nlet intent = 'unknown';\nlet confidence = 0;\nlet reason = 'classification failed';\ntry {\n  let content = ai.choices[0].message.content;\n  content = String(content).replace(/```json|```/g, '').trim();\n  const p = JSON.parse(content);\n  if (map[p.intent]) intent = p.intent;\n  confidence = Math.max(0, Math.min(1, Number(p.confidence) || 0));\n  reason = String(p.reason || '').slice(0, 500);\n} catch (e) {\n  const apiErr = ai.error && ai.error.message ? ai.error.message : e.message;\n  reason = 'Classifier output invalid or LLM call failed: ' + apiErr;\n  intent = 'unknown';\n  confidence = 0;\n}\nlet specialist = map[intent];\nif (confidence < LOW_CONFIDENCE && specialist !== 'human_escalation') {\n  reason += ' | low confidence -> human_escalation';\n  specialist = 'human_escalation';\n}\nreturn [{ json: {\n  customer_id: cust.id,\n  customer_external_id: ctx.customer_external_id,\n  message_id: ctx.message_id,\n  message: ctx.message,\n  supabase_url: ctx.supabase_url,\n  llm_model: ctx.llm_model,\n  test_mode: ctx.test_mode,\n  intent, confidence,\n  routing_reason: reason,\n  selected_specialist: specialist,\n  needs_human: specialist === 'human_escalation'\n} }];"
+      },
+      "id": "e6df3311-c30c-45f9-811e-946c0f7600fe",
+      "name": "Parse Intent & Route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        -1104
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.supabase_url }}/rest/v1/supervisor_audit_log",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ customer_id: $json.customer_id, message_id: $json.message_id, original_message: $json.message, intent: $json.intent, selected_specialist: $json.selected_specialist, routing_reason: $json.routing_reason, confidence: $json.confidence, needs_human: $json.needs_human, retry_count: 0, status: 'classified' }) }}",
+        "options": {}
+      },
+      "id": "2a1c25cd-7dc9-4b6a-b33a-84842a6ae7e4",
+      "name": "Insert Audit Log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        -1104
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ ['sales_agent','support_agent','billing_agent'].includes($('Parse Intent & Route').first().json.selected_specialist) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "aaf27cd9-857f-40b8-a05e-38047363248b",
+      "name": "Is Specialist Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        -1104
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const route = $('Parse Intent & Route').first().json;\nconst ids = { sales_agent: 'YOUR_SALES_AGENT_WORKFLOW_ID', support_agent: 'YOUR_SUPPORT_AGENT_WORKFLOW_ID', billing_agent: 'YOUR_BILLING_AGENT_WORKFLOW_ID' };\nconst spec = route.selected_specialist;\nreturn [{ json: { customer_id: route.customer_id, message: route.message, intent: route.intent, memory: $('Build Memory Context').first().json.memory_text || '', context: '', attempt: 1, specialist: spec, workflow_id: ids[spec] } }];"
+      },
+      "id": "e71586d5-671c-4acc-9842-5e5c16830c9b",
+      "name": "Prepare Specialist Call 1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        -1312
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.workflow_id }}"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "cb1bd526-695b-4a64-8308-f2d4b75c709f",
+      "name": "Call Specialist 1",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        1776,
+        -1312
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json || {};\nconst spec = $('Prepare Specialist Call 1').first().json.specialist;\nconst agent = String(spec).replace('_agent', '');\nlet sr;\nif (typeof j.success === 'boolean' && 'response' in j) { sr = j; }\nelse { const e = j.error || j; const msg = String(e.message || e.description || JSON.stringify(e)).slice(0, 500);\n  sr = { success: false, response: null, confidence: 0, data: {}, needs_human: true, error: 'specialist_call_failed: ' + msg, agent: agent }; }\nreturn [{ json: { attempt: 1, specialist_result: sr } }];"
+      },
+      "id": "fc77076c-b241-4584-8f21-68934b0adec9",
+      "name": "Collect Result 1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        -1312
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// TEST-ONLY component: active only when the request contains test_mode. Used to prove that the reviewer catches bad answers.\nconst st = $input.first().json;\nconst mode = $('Parse Intent & Route').first().json.test_mode;\nconst sr = JSON.parse(JSON.stringify(st.specialist_result));\nlet corrupted = false;\nif (sr.success && sr.response && (mode === 'corrupt_all' || (mode === 'corrupt_first_attempt' && st.attempt === 1))) {\n  sr.response += '\\n\\nSpecial offer: 30% discount on all orders today and free express shipping!';\n  sr.data = sr.data || {}; sr.data.test_corrupted = true; corrupted = true;\n}\nreturn [{ json: { attempt: st.attempt, specialist_result: sr, test_corrupted: corrupted } }];"
+      },
+      "id": "d764c4c9-e516-479d-b4d4-8d0458edd72a",
+      "name": "Test Hook 1 (test only)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2208,
+        -1312
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const st = $input.first().json;\nconst route = $('Parse Intent & Route').first().json;\nconst spec = route.selected_specialist; let memText = ''; try { memText = $('Build Memory Context').first().json.memory_text || ''; } catch (e) {}\nconst sr = st.specialist_result;\nconst d = sr.data || {};\nconst evidence = (d.evidence && d.evidence.length) ? JSON.stringify(d.evidence).slice(0, 8000) : 'NONE (no matching record was found)';\nlet computed, rules;\nif (spec === 'support_agent') {\n  computed = JSON.stringify({ request_type: d.request_type || null, order_number: d.order_number || null, ticket_reference: d.ticket_reference || null, ticket_status: d.ticket_status || null });\n  rules = 'BUSINESS RULES (support agent): The support agent must never invent order status, tracking numbers, delivery dates, refund status or any other fact. Every order number, status, total, tracking number and date in the answer must appear in VERIFIED EVIDENCE. If VERIFIED EVIDENCE is NONE the agent must say it could not find the order and ask the customer to check the order number. No refund policy is configured: the agent must never approve, deny, promise, or estimate the time or amount of a refund, and must never state refund eligibility; it may only say the request was recorded and passed to the team for review. For complaints the agent must be empathetic, must not promise compensation, and may say the complaint was recorded. A reference code that matches ticket_reference in SYSTEM-COMPUTED DATA is valid system-generated data. If the answer records a refund request or complaint and passes it to the human team, that is the correct behaviour: approve it and set needs_human=false, because the ticket already exists.';\n} else if (spec === 'billing_agent') {\n  computed = JSON.stringify({ request_type: d.request_type || null, ticket_reference: d.ticket_reference || null, ticket_status: d.ticket_status || null });\n  rules = 'BUSINESS RULES (billing agent): The billing agent must never invent usage, amounts, invoice numbers, invoice status, subscription status, payment status or any billing fact. Every number, status, plan name, price, date and invoice detail in the answer must appear in VERIFIED EVIDENCE (data read from Stripe). A value shown as NOT AVAILABLE must be reported as unavailable, never guessed. A usage count of 0 is valid if VERIFIED EVIDENCE shows 0. The agent cannot change subscriptions, cancel plans, send invoices, apply credits or refunds: no authorization rules are configured. For such requests it may only say the request was recorded and passed to the team for review. A reference code that matches ticket_reference in SYSTEM-COMPUTED DATA is valid system-generated data. If the answer records a subscription change or invoice request and passes it to the human team, that is the correct behaviour: approve it, because the ticket already exists.';\n} else {\n  computed = JSON.stringify({ used_skus: d.used_skus || [], quote_id: d.quote_id || null, quote_total: d.quote_total || null, quote_issues: d.quote_issues || [] });\n  rules = 'BUSINESS RULES (sales agent): the sales agent must never invent product information, prices, availability, discounts, specifications or quote values. No discounts or promotions exist in the data, so any discount or offer is invented. When information is missing the agent must say it does not have enough verified information. A truthful statement that the catalog lacks a requested item is acceptable when VERIFIED EVIDENCE really contains no matching product.';\n}\nconst user = 'CUSTOMER MESSAGE:\\n' + route.message + '\\n\\nSPECIALIST: ' + spec + '\\n\\nSPECIALIST ANSWER:\\n' + (sr.response || '(none; specialist error: ' + sr.error + ')') + '\\n\\nSYSTEM-COMPUTED DATA:\\n' + computed + '\\n\\nVERIFIED EVIDENCE (records from the database):\\n' + evidence + '\\n\\nCUSTOMER MEMORY (background only):\\n' + (memText || 'none');\nconst system = 'You are the quality reviewer (Supervisor) of a multi-agent business platform. You evaluate ONE specialist answer before it is sent to a customer. You receive: CUSTOMER MESSAGE, SPECIALIST ANSWER, SYSTEM-COMPUTED DATA and VERIFIED EVIDENCE (the database records the specialist could use). Check strictly: (1) relevant: the answer addresses the customer message. (2) sufficient: the answer is useful and complete, or it honestly says the information is unavailable. (3) supported: every price, availability, stock figure, specification, SKU, order number, status, tracking number, date and number in the answer appears in VERIFIED EVIDENCE or in SYSTEM-COMPUTED DATA. (4) no_hallucination: nothing invented, such as products, prices, stock, discounts, offers, free shipping, warranties, specifications, order facts or refund promises. (5) rules_followed: see BUSINESS RULES. ' + rules + ' MEMORY RULE: CUSTOMER MEMORY is background about earlier interactions of this same customer. A statement about earlier messages, orders or tickets of this customer is supported if it appears in CUSTOMER MEMORY, but memory is never a valid source for prices, stock, specifications, order status or tracking numbers. DECISION: approved=true only if all five checks pass. If any claim is unsupported by the evidence, approved=false. needs_retry=true if rewriting using only the evidence could fix the answer. needs_human=true if rewriting cannot fix it or the request is sensitive. confidence is your confidence in this evaluation, from 0 to 1. Return ONLY a JSON object: {\"approved\": boolean, \"confidence\": number, \"reason\": string, \"needs_retry\": boolean, \"needs_human\": boolean, \"checks\": {\"relevant\": boolean, \"sufficient\": boolean, \"supported\": boolean, \"no_hallucination\": boolean, \"rules_followed\": boolean}}.';\nreturn [{ json: { attempt: st.attempt, specialist_result: sr, test_corrupted: st.test_corrupted, system_prompt: system, user_prompt: user } }];"
+      },
+      "id": "368f9727-c361-4e9f-b3c7-213f21a5dda0",
+      "name": "Build Critique Prompt 1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2432,
+        -1312
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $('Parse Intent & Route').first().json.llm_model, temperature: 0, max_tokens: 2000, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: $json.system_prompt }, { role: 'user', content: $json.user_prompt } ] }) }}",
+        "options": {}
+      },
+      "id": "87baac27-5f2c-46a5-a5e5-cdad5997fa42",
+      "name": "Critique LLM 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2656,
+        -1312
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "groqApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Groq account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const st = $('Test Hook 1 (test only)').first().json;\nconst ai = $input.first().json;\nconst sr = st.specialist_result;\nconst attempt = st.attempt;\nconst MAX = 2;\nconst MIN_CONF = 0.7;\nlet critique; let ok = false;\ntry {\n  let c = ai.choices[0].message.content;\n  c = String(c).replace(/```json|```/g, '').trim();\n  const p = JSON.parse(c);\n  critique = { approved: p.approved === true, confidence: Math.max(0, Math.min(1, Number(p.confidence) || 0)), reason: String(p.reason || '').slice(0, 800), needs_retry: p.needs_retry === true, needs_human: p.needs_human === true, checks: p.checks || {} };\n  ok = typeof p.approved === 'boolean';\n} catch (e) {\n  critique = { approved: false, confidence: 0, reason: 'critique_unavailable: ' + String((ai.error && ai.error.message) || e.message).slice(0, 300), needs_retry: false, needs_human: true, checks: {} };\n}\nlet decision, reason;\nif (!sr.success) { decision = attempt < MAX ? 'retry' : 'escalate'; reason = 'specialist_failed: ' + (sr.error || 'unknown'); }\nelse if (!ok) { decision = 'escalate'; reason = critique.reason; }\nelse if (critique.approved && critique.confidence >= MIN_CONF && !critique.needs_human) { decision = 'approve'; reason = critique.reason; }\nelse if (critique.needs_human) { decision = 'escalate'; reason = 'reviewer_requested_human: ' + critique.reason; }\nelse if (attempt < MAX) { decision = 'retry'; reason = critique.reason; }\nelse { decision = 'escalate'; reason = 'still_insufficient_after_retry: ' + critique.reason; }\nreturn [{ json: { attempt, decision, reason, critique_reason: critique.reason || reason, critique, specialist_result: sr, final_response: sr.response, confidence: critique.confidence, test_corrupted: st.test_corrupted === true } }];"
+      },
+      "id": "bfeb4716-6c6e-43d7-887d-be470b0f9fc7",
+      "name": "Decide Action 1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        -1312
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.decision === 'retry' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "944b90b2-430c-46af-84b2-ce2fcf669eb2",
+      "name": "Retry Needed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2960,
+        -1312
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.decision === 'approve' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "caa49387-73e8-4004-8680-cdb33a867be7",
+      "name": "Approved 1?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3168,
+        -1200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const route = $('Parse Intent & Route').first().json;\nconst prev = $('Decide Action 1').first().json;\nconst ids = { sales_agent: 'YOUR_SALES_AGENT_WORKFLOW_ID', support_agent: 'YOUR_SUPPORT_AGENT_WORKFLOW_ID', billing_agent: 'YOUR_BILLING_AGENT_WORKFLOW_ID' };\nconst spec = route.selected_specialist;\nreturn [{ json: { customer_id: route.customer_id, message: route.message, intent: route.intent, memory: $('Build Memory Context').first().json.memory_text || '', context: 'Reviewer feedback: ' + prev.critique_reason, attempt: 2, specialist: spec, workflow_id: ids[spec] } }];"
+      },
+      "id": "89483350-911d-4b3b-8648-8e3076564ba3",
+      "name": "Prepare Specialist Call 2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3168,
+        -1712
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.workflow_id }}"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "5727ffa8-e1a3-430e-8aa4-c6e8b49a784e",
+      "name": "Call Specialist 2",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [
+        3392,
+        -1712
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json || {};\nconst spec = $('Prepare Specialist Call 2').first().json.specialist;\nconst agent = String(spec).replace('_agent', '');\nlet sr;\nif (typeof j.success === 'boolean' && 'response' in j) { sr = j; }\nelse { const e = j.error || j; const msg = String(e.message || e.description || JSON.stringify(e)).slice(0, 500);\n  sr = { success: false, response: null, confidence: 0, data: {}, needs_human: true, error: 'specialist_call_failed: ' + msg, agent: agent }; }\nreturn [{ json: { attempt: 2, specialist_result: sr } }];"
+      },
+      "id": "5742c438-74ba-468b-a26f-f0ac7a6942e4",
+      "name": "Collect Result 2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3616,
+        -1712
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// TEST-ONLY component: active only when the request contains test_mode. Used to prove that the reviewer catches bad answers.\nconst st = $input.first().json;\nconst mode = $('Parse Intent & Route').first().json.test_mode;\nconst sr = JSON.parse(JSON.stringify(st.specialist_result));\nlet corrupted = false;\nif (sr.success && sr.response && (mode === 'corrupt_all' || (mode === 'corrupt_first_attempt' && st.attempt === 1))) {\n  sr.response += '\\n\\nSpecial offer: 30% discount on all orders today and free express shipping!';\n  sr.data = sr.data || {}; sr.data.test_corrupted = true; corrupted = true;\n}\nreturn [{ json: { attempt: st.attempt, specialist_result: sr, test_corrupted: corrupted } }];"
+      },
+      "id": "86cd4303-a059-4d93-8225-b99710a3af75",
+      "name": "Test Hook 2 (test only)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3840,
+        -1712
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const st = $input.first().json;\nconst route = $('Parse Intent & Route').first().json;\nconst spec = route.selected_specialist; let memText = ''; try { memText = $('Build Memory Context').first().json.memory_text || ''; } catch (e) {}\nconst sr = st.specialist_result;\nconst d = sr.data || {};\nconst evidence = (d.evidence && d.evidence.length) ? JSON.stringify(d.evidence).slice(0, 8000) : 'NONE (no matching record was found)';\nlet computed, rules;\nif (spec === 'support_agent') {\n  computed = JSON.stringify({ request_type: d.request_type || null, order_number: d.order_number || null, ticket_reference: d.ticket_reference || null, ticket_status: d.ticket_status || null });\n  rules = 'BUSINESS RULES (support agent): The support agent must never invent order status, tracking numbers, delivery dates, refund status or any other fact. Every order number, status, total, tracking number and date in the answer must appear in VERIFIED EVIDENCE. If VERIFIED EVIDENCE is NONE the agent must say it could not find the order and ask the customer to check the order number. No refund policy is configured: the agent must never approve, deny, promise, or estimate the time or amount of a refund, and must never state refund eligibility; it may only say the request was recorded and passed to the team for review. For complaints the agent must be empathetic, must not promise compensation, and may say the complaint was recorded. A reference code that matches ticket_reference in SYSTEM-COMPUTED DATA is valid system-generated data. If the answer records a refund request or complaint and passes it to the human team, that is the correct behaviour: approve it and set needs_human=false, because the ticket already exists.';\n} else if (spec === 'billing_agent') {\n  computed = JSON.stringify({ request_type: d.request_type || null, ticket_reference: d.ticket_reference || null, ticket_status: d.ticket_status || null });\n  rules = 'BUSINESS RULES (billing agent): The billing agent must never invent usage, amounts, invoice numbers, invoice status, subscription status, payment status or any billing fact. Every number, status, plan name, price, date and invoice detail in the answer must appear in VERIFIED EVIDENCE (data read from Stripe). A value shown as NOT AVAILABLE must be reported as unavailable, never guessed. A usage count of 0 is valid if VERIFIED EVIDENCE shows 0. The agent cannot change subscriptions, cancel plans, send invoices, apply credits or refunds: no authorization rules are configured. For such requests it may only say the request was recorded and passed to the team for review. A reference code that matches ticket_reference in SYSTEM-COMPUTED DATA is valid system-generated data. If the answer records a subscription change or invoice request and passes it to the human team, that is the correct behaviour: approve it, because the ticket already exists.';\n} else {\n  computed = JSON.stringify({ used_skus: d.used_skus || [], quote_id: d.quote_id || null, quote_total: d.quote_total || null, quote_issues: d.quote_issues || [] });\n  rules = 'BUSINESS RULES (sales agent): the sales agent must never invent product information, prices, availability, discounts, specifications or quote values. No discounts or promotions exist in the data, so any discount or offer is invented. When information is missing the agent must say it does not have enough verified information. A truthful statement that the catalog lacks a requested item is acceptable when VERIFIED EVIDENCE really contains no matching product.';\n}\nconst user = 'CUSTOMER MESSAGE:\\n' + route.message + '\\n\\nSPECIALIST: ' + spec + '\\n\\nSPECIALIST ANSWER:\\n' + (sr.response || '(none; specialist error: ' + sr.error + ')') + '\\n\\nSYSTEM-COMPUTED DATA:\\n' + computed + '\\n\\nVERIFIED EVIDENCE (records from the database):\\n' + evidence + '\\n\\nCUSTOMER MEMORY (background only):\\n' + (memText || 'none');\nconst system = 'You are the quality reviewer (Supervisor) of a multi-agent business platform. You evaluate ONE specialist answer before it is sent to a customer. You receive: CUSTOMER MESSAGE, SPECIALIST ANSWER, SYSTEM-COMPUTED DATA and VERIFIED EVIDENCE (the database records the specialist could use). Check strictly: (1) relevant: the answer addresses the customer message. (2) sufficient: the answer is useful and complete, or it honestly says the information is unavailable. (3) supported: every price, availability, stock figure, specification, SKU, order number, status, tracking number, date and number in the answer appears in VERIFIED EVIDENCE or in SYSTEM-COMPUTED DATA. (4) no_hallucination: nothing invented, such as products, prices, stock, discounts, offers, free shipping, warranties, specifications, order facts or refund promises. (5) rules_followed: see BUSINESS RULES. ' + rules + ' MEMORY RULE: CUSTOMER MEMORY is background about earlier interactions of this same customer. A statement about earlier messages, orders or tickets of this customer is supported if it appears in CUSTOMER MEMORY, but memory is never a valid source for prices, stock, specifications, order status or tracking numbers. DECISION: approved=true only if all five checks pass. If any claim is unsupported by the evidence, approved=false. needs_retry=true if rewriting using only the evidence could fix the answer. needs_human=true if rewriting cannot fix it or the request is sensitive. confidence is your confidence in this evaluation, from 0 to 1. Return ONLY a JSON object: {\"approved\": boolean, \"confidence\": number, \"reason\": string, \"needs_retry\": boolean, \"needs_human\": boolean, \"checks\": {\"relevant\": boolean, \"sufficient\": boolean, \"supported\": boolean, \"no_hallucination\": boolean, \"rules_followed\": boolean}}.';\nreturn [{ json: { attempt: st.attempt, specialist_result: sr, test_corrupted: st.test_corrupted, system_prompt: system, user_prompt: user } }];"
+      },
+      "id": "1f256503-2fc7-4848-a9e7-8ad6e9b183fd",
+      "name": "Build Critique Prompt 2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4048,
+        -1712
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "groqApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $('Parse Intent & Route').first().json.llm_model, temperature: 0, max_tokens: 2000, response_format: { type: 'json_object' }, messages: [ { role: 'system', content: $json.system_prompt }, { role: 'user', content: $json.user_prompt } ] }) }}",
+        "options": {}
+      },
+      "id": "218bc822-1ff6-45ba-8727-5da17db069b2",
+      "name": "Critique LLM 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4272,
+        -1712
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "groqApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Groq account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const st = $('Test Hook 2 (test only)').first().json;\nconst ai = $input.first().json;\nconst sr = st.specialist_result;\nconst attempt = st.attempt;\nconst MAX = 2;\nconst MIN_CONF = 0.7;\nlet critique; let ok = false;\ntry {\n  let c = ai.choices[0].message.content;\n  c = String(c).replace(/```json|```/g, '').trim();\n  const p = JSON.parse(c);\n  critique = { approved: p.approved === true, confidence: Math.max(0, Math.min(1, Number(p.confidence) || 0)), reason: String(p.reason || '').slice(0, 800), needs_retry: p.needs_retry === true, needs_human: p.needs_human === true, checks: p.checks || {} };\n  ok = typeof p.approved === 'boolean';\n} catch (e) {\n  critique = { approved: false, confidence: 0, reason: 'critique_unavailable: ' + String((ai.error && ai.error.message) || e.message).slice(0, 300), needs_retry: false, needs_human: true, checks: {} };\n}\nlet decision, reason;\nif (!sr.success) { decision = attempt < MAX ? 'retry' : 'escalate'; reason = 'specialist_failed: ' + (sr.error || 'unknown'); }\nelse if (!ok) { decision = 'escalate'; reason = critique.reason; }\nelse if (critique.approved && critique.confidence >= MIN_CONF && !critique.needs_human) { decision = 'approve'; reason = critique.reason; }\nelse if (critique.needs_human) { decision = 'escalate'; reason = 'reviewer_requested_human: ' + critique.reason; }\nelse if (attempt < MAX) { decision = 'retry'; reason = critique.reason; }\nelse { decision = 'escalate'; reason = 'still_insufficient_after_retry: ' + critique.reason; }\nreturn [{ json: { attempt, decision, reason, critique_reason: critique.reason || reason, critique, specialist_result: sr, final_response: sr.response, confidence: critique.confidence, test_corrupted: st.test_corrupted === true } }];"
+      },
+      "id": "bfd3762e-f039-4f56-b53a-4222ed55a570",
+      "name": "Decide Action 2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4496,
+        -1712
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.decision === 'approve' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "08e10e67-2bbb-458d-8f9a-3f26be60e833",
+      "name": "Approved 2?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4528,
+        -1712
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst route = $('Parse Intent & Route').first().json;\nconst audit = $('Insert Audit Log').first().json;\nconst sr = d.specialist_result || {};\nconst sd = sr.data || {};\nconst needsHuman = sr.needs_human === true;\nlet mem = 0; try { mem = $('Build Memory Context').first().json.memory_count || 0; } catch (e) {}\nconst patch = { specialist_result: sr, critique: d.critique, confidence: d.confidence, retry_count: d.attempt - 1, needs_human: needsHuman, final_response: d.final_response, status: 'approved' };\nconst resp = { success: true, status: 'approved', response: d.final_response, intent: route.intent, specialist: route.selected_specialist, confidence: d.confidence, attempts: d.attempt, retried: d.attempt > 1, needs_human: needsHuman, ticket_reference: sd.ticket_reference || null, test_corrupted: d.test_corrupted === true, critique: { approved: d.critique.approved, reason: d.critique.reason }, audit_log_id: audit.id, memory_count: mem };\nreturn [{ json: { audit_id: audit.id, supabase_url: route.supabase_url, patch_body: patch, response_body: resp } }];"
+      },
+      "id": "d1d955ae-cba8-4c8e-b5ed-ea15a7968b3b",
+      "name": "Build Approved Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4768,
+        -1408
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.supabase_url }}/rest/v1/supervisor_audit_log?id=eq.{{ $json.audit_id }}&select=id",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.patch_body) }}",
+        "options": {}
+      },
+      "id": "07dc8148-0972-48bc-b335-80a70fcc971f",
+      "name": "Update Audit - Approved",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4992,
+        -1408
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Build Approved Response').first().json.response_body) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "b8a5f84d-307a-40b5-b36f-fcd407f77f4c",
+      "name": "Respond 200 Approved",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        5216,
+        -1472
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json || {};\nconst route = $('Parse Intent & Route').first().json;\nconst audit = $('Insert Audit Log').first().json;\nlet reason, sr = null, critique = null, attempt = 0, conf = route.confidence;\nif (d.decision === 'escalate') { reason = d.reason; sr = d.specialist_result; critique = d.critique; attempt = d.attempt; conf = d.confidence; }\nelse if (route.selected_specialist === 'human_escalation') { reason = 'routed_to_human: ' + route.routing_reason; }\nelse { reason = 'specialist_not_available: ' + route.selected_specialist + ' (not built yet)'; }\nconst msg = \"Thank you. I've passed your request to our team and a human agent will follow up with you. / ধন্যবাদ। আপনার অনুরোধ আমাদের টিমকে জানানো হয়েছে, একজন প্রতিনিধি শীঘ্রই যোগাযোগ করবেন।\";\nreturn [{ json: { supabase_url: route.supabase_url, audit_id: audit.id,\n  escalation_payload: { customer_id: route.customer_id, audit_log_id: audit.id, reason: String(reason).slice(0, 1000), status: 'open' },\n  patch_body: { specialist_result: sr, critique, confidence: conf, retry_count: Math.max(0, attempt - 1), needs_human: true, final_response: msg, status: 'escalated' },\n  response_body: { success: true, status: 'escalated', response: msg, reason, intent: route.intent, specialist: route.selected_specialist, attempts: attempt, audit_log_id: audit.id } } }];"
+      },
+      "id": "25e7f108-3d5f-4512-a104-c1aa720af2a9",
+      "name": "Prepare Escalation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3168,
+        -912
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.supabase_url }}/rest/v1/escalations",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.escalation_payload) }}",
+        "options": {}
+      },
+      "id": "d1e8b082-854a-4327-8272-e33400819b11",
+      "name": "Insert Escalation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3392,
+        -912
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Prepare Escalation').first().json.supabase_url }}/rest/v1/supervisor_audit_log?id=eq.{{ $('Prepare Escalation').first().json.audit_id }}&select=id",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Prepare Escalation').first().json.patch_body) }}",
+        "options": {}
+      },
+      "id": "d5deb6c3-807e-4990-acfe-12bd8b3bfe34",
+      "name": "Update Audit - Escalated",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3616,
+        -912
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify(Object.assign({}, $('Prepare Escalation').first().json.response_body, { escalation_id: $('Insert Escalation').first().json.id })) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "4301db09-3311-4271-97d4-d9e306140eeb",
+      "name": "Respond 200 Escalated",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3840,
+        -960
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, error: 'database_error', message: 'Supervisor could not save data. Please try again or contact support.' }) }}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "8d0c7581-3937-4024-9ee0-9051d65bdd26",
+      "name": "Respond 500 Database Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3840,
+        -640
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.mistral.ai/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "mistralCloudApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'mistral-embed', input: [ $('Parse Intent & Route').first().json.message ] }) }}",
+        "options": {}
+      },
+      "id": "a29a0c51-3dde-4252-b955-627c14208dad",
+      "name": "Embed Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        -832
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Mistral Cloud account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Parse Intent & Route').first().json.supabase_url }}/rest/v1/rpc/match_customer_memory",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query_embedding: ($json.data && $json.data[0]) ? $json.data[0].embedding : null, p_customer_id: $('Parse Intent & Route').first().json.customer_id, match_count: 5 }) }}",
+        "options": {}
+      },
+      "id": "7117a929-f3d1-4995-8de8-db237ae512fb",
+      "name": "Search Memory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1344,
+        -832
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map(i => i.json).filter(m => m && m.content && typeof m.similarity === 'number');\nconst top = items.slice(0, 5);\nconst memory_text = top.map(m => '- [' + String(m.created_at || '').slice(0, 10) + '] ' + String(m.content).slice(0, 500)).join('\\n');\nreturn [{ json: { memory_text, memory_count: top.length } }];"
+      },
+      "id": "8436f0b7-1132-4170-8d77-a207cc921914",
+      "name": "Build Memory Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        -832
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const route = $('Parse Intent & Route').first().json;\nlet outcome = 'escalated';\nlet approved = null, esc = null;\ntry { approved = $('Build Approved Response').first().json; } catch (e) {}\ntry { esc = $('Prepare Escalation').first().json; } catch (e) {}\nif (approved && approved.audit_id) outcome = 'approved';\nlet row = null;\ntry {\n  const date = new Date().toISOString().slice(0, 10);\n  const msg = String(route.message).replace(/\\s+/g, ' ').slice(0, 300);\n  let type, content, meta;\n  if (outcome === 'approved') {\n    const rb = approved.response_body || {};\n    const sd = ((approved.patch_body || {}).specialist_result || {}).data || {};\n    const spec = rb.specialist;\n    if (spec === 'support_agent') {\n      type = sd.request_type || 'support_interaction';\n      content = '[' + date + '] Customer message: \"' + msg + '\". Handled by support agent. Request type: ' + (sd.request_type || 'unknown') + '.' + (sd.order_number ? ' Order: ' + sd.order_number + '.' : '') + (sd.ticket_reference ? ' Ticket reference: ' + sd.ticket_reference + '.' : '') + ' Outcome: answered' + (rb.needs_human ? ', passed to human team.' : '.');\n    } else if (spec === 'billing_agent') {\n      type = sd.request_type || 'billing_interaction';\n      content = '[' + date + '] Customer message: \"' + msg + '\". Handled by billing agent. Request type: ' + (sd.request_type || 'unknown') + '.' + (sd.ticket_reference ? ' Ticket reference: ' + sd.ticket_reference + '.' : '') + ' Outcome: answered' + (rb.needs_human ? ', passed to human team.' : '.');\n    } else {\n      type = 'sales_inquiry';\n      content = '[' + date + '] Customer message: \"' + msg + '\". Handled by sales agent.' + ((sd.used_skus && sd.used_skus.length) ? ' Products discussed (SKU): ' + sd.used_skus.join(', ') + '.' : '') + (sd.quote_id ? ' Quote created: ' + sd.quote_id + '.' : '') + ' Outcome: answered.';\n    }\n    meta = { source_message_id: route.message_id, audit_log_id: approved.audit_id, specialist: spec, intent: route.intent, outcome: 'approved', order_number: sd.order_number || null, ticket_reference: sd.ticket_reference || null, used_skus: sd.used_skus || [] };\n  } else {\n    const rb = (esc && esc.response_body) || {};\n    type = 'escalation';\n    content = '[' + date + '] Customer message: \"' + msg + '\". Request was escalated to a human agent. Reason: ' + String(rb.reason || 'unknown').slice(0, 200);\n    meta = { source_message_id: route.message_id, audit_log_id: esc ? esc.audit_id : null, specialist: route.selected_specialist, intent: route.intent, outcome: 'escalated' };\n  }\n  row = { customer_id: route.customer_id, memory_type: type, content, metadata: meta };\n} catch (e) { row = null; }\nreturn [{ json: { outcome, row, content: row ? row.content : null } }];"
+      },
+      "id": "fd1c8077-adc1-48b6-ae56-7ce20a5989f3",
+      "name": "Prepare Memory",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3968,
+        -512
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.mistral.ai/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "mistralCloudApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'mistral-embed', input: [ $json.content ] }) }}",
+        "options": {}
+      },
+      "id": "435a1d23-5f50-4274-9ccd-935b54e65410",
+      "name": "Embed Memory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4192,
+        -512
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Mistral Cloud account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Parse Intent & Route').first().json.supabase_url }}/rest/v1/customer_memory",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify(Object.assign({}, $('Prepare Memory').first().json.row, { embedding: $json.data[0].embedding })) }}",
+        "options": {}
+      },
+      "id": "626c561c-e103-45b5-bd8d-f3bba44664b1",
+      "name": "Insert Memory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4416,
+        -512
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $('Prepare Memory').first().json.outcome === 'approved' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "132887f7-ff9a-4a38-b576-00904235fe9c",
+      "name": "Memory Path?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4640,
+        -512
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ap = $('Build Approved Response').first().json;\nconst route = $('Parse Intent & Route').first().json;\nreturn [{ json: { supabase_url: route.supabase_url, customer_id: route.customer_id, row: { customer_id: route.customer_id, event_type: 'ai_request', quantity: 1, unit: 'request', stripe_reported: false, metadata: { audit_log_id: ap.audit_id, specialist: route.selected_specialist, intent: route.intent, message_id: route.message_id } } } }];"
+      },
+      "id": "72c5cbef-324c-41f9-a239-77706fbec417",
+      "name": "Prepare Usage Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4992,
+        -1152
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.supabase_url }}/rest/v1/usage_events",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.row) }}",
+        "options": {}
+      },
+      "id": "3f6e6eaf-b826-49e2-9021-84907c235b73",
+      "name": "Insert Usage Event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5216,
+        -1152
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Prepare Usage Record').first().json.supabase_url }}/rest/v1/customers?id=eq.{{ $('Prepare Usage Record').first().json.customer_id }}&select=stripe_customer_id&limit=1",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {}
+      },
+      "id": "4fbee422-d6a2-4b84-9c51-f7e8cac0dc82",
+      "name": "Fetch Stripe Customer ID",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5440,
+        -1152
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rec = $('Prepare Usage Record').first().json;\nlet ins = null; try { const i = $('Insert Usage Event').first().json; if (i && i.id) ins = i; } catch (e) {}\nconst cust = $input.first().json || {};\nconst sid = cust.stripe_customer_id || null;\nconst usageId = ins ? ins.id : null;\nreturn [{ json: { send: !!(usageId && sid), usage_id: usageId, stripe_customer_id: sid, supabase_url: rec.supabase_url } }];"
+      },
+      "id": "2ec0d6fa-d010-424a-acf3-07be07599879",
+      "name": "Prepare Meter Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5664,
+        -1152
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.send }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "29ef6097-f0ac-4229-8621-3f40f4cdab01",
+      "name": "Send Meter Event?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        5888,
+        -1152
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.stripe.com/v1/billing/meter_events",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "event_name",
+              "value": "ai_request"
+            },
+            {
+              "name": "identifier",
+              "value": "={{ $json.usage_id }}"
+            },
+            {
+              "name": "payload[stripe_customer_id]",
+              "value": "={{ $json.stripe_customer_id }}"
+            },
+            {
+              "name": "payload[value]",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0619864a-6063-42a9-8bcc-c877b4db6c3a",
+      "name": "Send Stripe Meter Event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6112,
+        -1248
+      ],
+      "credentials": {
+        "stripeApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Stripe account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.object === 'billing.meter_event' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cb6bf5e9-ce6e-4cc2-a2c2-e9590d808bf6",
+      "name": "Stripe Accepted?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        6336,
+        -1248
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Prepare Meter Event').first().json.supabase_url }}/rest/v1/usage_events?id=eq.{{ $('Prepare Meter Event').first().json.usage_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ stripe_reported: true }) }}",
+        "options": {}
+      },
+      "id": "871c8f87-2a9e-487e-8ea1-2e784d728997",
+      "name": "Mark Usage Reported",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6560,
+        -1360
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Prepare Specialist Call 1": {
+      "main": [
+        [
+          {
+            "node": "Call Specialist 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Specialist 1": {
+      "main": [
+        [
+          {
+            "node": "Collect Result 1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Collect Result 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Result 1": {
+      "main": [
+        [
+          {
+            "node": "Test Hook 1 (test only)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test Hook 1 (test only)": {
+      "main": [
+        [
+          {
+            "node": "Build Critique Prompt 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Critique Prompt 1": {
+      "main": [
+        [
+          {
+            "node": "Critique LLM 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Critique LLM 1": {
+      "main": [
+        [
+          {
+            "node": "Decide Action 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Specialist Call 2": {
+      "main": [
+        [
+          {
+            "node": "Call Specialist 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Specialist 2": {
+      "main": [
+        [
+          {
+            "node": "Collect Result 2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Collect Result 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Result 2": {
+      "main": [
+        [
+          {
+            "node": "Test Hook 2 (test only)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test Hook 2 (test only)": {
+      "main": [
+        [
+          {
+            "node": "Build Critique Prompt 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Critique Prompt 2": {
+      "main": [
+        [
+          {
+            "node": "Critique LLM 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Critique LLM 2": {
+      "main": [
+        [
+          {
+            "node": "Decide Action 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Customer Message": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Input Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Valid?": {
+      "main": [
+        [
+          {
+            "node": "Upsert Customer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400 Invalid Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Customer": {
+      "main": [
+        [
+          {
+            "node": "Classify Intent (LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 500 Database Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Intent (LLM)": {
+      "main": [
+        [
+          {
+            "node": "Parse Intent & Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Intent & Route": {
+      "main": [
+        [
+          {
+            "node": "Insert Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Audit Log": {
+      "main": [
+        [
+          {
+            "node": "Embed Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 500 Database Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Specialist Available?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Specialist Call 1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide Action 1": {
+      "main": [
+        [
+          {
+            "node": "Retry Needed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry Needed?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Specialist Call 2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Approved 1?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved 1?": {
+      "main": [
+        [
+          {
+            "node": "Build Approved Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide Action 2": {
+      "main": [
+        [
+          {
+            "node": "Approved 2?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved 2?": {
+      "main": [
+        [
+          {
+            "node": "Build Approved Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Approved Response": {
+      "main": [
+        [
+          {
+            "node": "Update Audit - Approved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Audit - Approved": {
+      "main": [
+        [
+          {
+            "node": "Prepare Usage Record",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 500 Database Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Escalation": {
+      "main": [
+        [
+          {
+            "node": "Insert Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Escalation": {
+      "main": [
+        [
+          {
+            "node": "Update Audit - Escalated",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 500 Database Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Audit - Escalated": {
+      "main": [
+        [
+          {
+            "node": "Prepare Memory",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 500 Database Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Message": {
+      "main": [
+        [
+          {
+            "node": "Search Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Memory": {
+      "main": [
+        [
+          {
+            "node": "Build Memory Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Memory Context": {
+      "main": [
+        [
+          {
+            "node": "Is Specialist Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Memory": {
+      "main": [
+        [
+          {
+            "node": "Embed Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Memory": {
+      "main": [
+        [
+          {
+            "node": "Insert Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Memory": {
+      "main": [
+        [
+          {
+            "node": "Memory Path?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory Path?": {
+      "main": [
+        [
+          {
+            "node": "Respond 200 Approved",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 200 Escalated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Usage Record": {
+      "main": [
+        [
+          {
+            "node": "Insert Usage Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Usage Event": {
+      "main": [
+        [
+          {
+            "node": "Fetch Stripe Customer ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Stripe Customer ID": {
+      "main": [
+        [
+          {
+            "node": "Prepare Meter Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Meter Event": {
+      "main": [
+        [
+          {
+            "node": "Send Meter Event?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Meter Event?": {
+      "main": [
+        [
+          {
+            "node": "Send Stripe Meter Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Stripe Meter Event": {
+      "main": [
+        [
+          {
+            "node": "Stripe Accepted?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stripe Accepted?": {
+      "main": [
+        [
+          {
+            "node": "Mark Usage Reported",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Usage Reported": {
+      "main": [
+        [
+          {
+            "node": "Prepare Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {},
+  "nodeGroups": [],
+  "tags": []
+}
